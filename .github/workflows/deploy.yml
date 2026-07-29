@@ -1,0 +1,88 @@
+name: Build and Deploy
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  # Catch a broken Dockerfile / compose file here rather than on the server.
+  build:
+    name: Validate and build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate compose file
+        run: docker compose config -q
+
+      - name: Build backend image
+        run: docker compose build
+
+      - name: Smoke test the stack
+        run: |
+          docker compose up -d --wait
+          curl -fsS http://localhost/ | grep -q "Global Chat"
+          docker compose exec -T backend python - <<'PY'
+          import asyncio, json, websockets
+
+          async def main():
+              async with websockets.connect("ws://nginx/ws") as a, \
+                         websockets.connect("ws://nginx/ws") as b:
+                  # drain the join / welcome / stats frames both clients get
+                  await asyncio.sleep(0.5)
+                  while True:
+                      try:
+                          await asyncio.wait_for(b.recv(), timeout=0.2)
+                      except asyncio.TimeoutError:
+                          break
+                  await a.send("ci smoke test")
+                  msg = json.loads(await asyncio.wait_for(b.recv(), timeout=5))
+                  assert msg["type"] == "chat", msg
+                  assert msg["message"] == "ci smoke test", msg
+                  print("websocket broadcast ok")
+
+          asyncio.run(main())
+          PY
+
+      - name: Show logs on failure
+        if: failure()
+        run: docker compose logs
+
+      - name: Tear down
+        if: always()
+        run: docker compose down -v
+
+  deploy:
+    name: Deploy to server
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy over SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          port: ${{ secrets.SSH_PORT || 22 }}
+          script_stop: true
+          script: |
+            set -e
+            APP_DIR="$HOME/devops-demo"
+
+            if [ ! -d "$APP_DIR/.git" ]; then
+              git clone https://github.com/${{ github.repository }}.git "$APP_DIR"
+            fi
+
+            cd "$APP_DIR"
+            git fetch --prune origin
+            git reset --hard origin/main
+
+            docker compose up -d --build --wait
+
+            # free-tier disks are small, don't let old layers pile up
+            docker image prune -f
+
+            curl -fsS -o /dev/null http://localhost/
+            echo "deployed $(git rev-parse --short HEAD)"

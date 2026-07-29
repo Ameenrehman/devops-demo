@@ -1,22 +1,20 @@
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.responses import Response
 from typing import List
 import json
 import random
 from datetime import datetime
-from fastapi.responses import FileResponse
 
 app = FastAPI()
 
 @app.get("/")
 async def get():
-    import os
-    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    index_path = os.path.join(base_dir, "frontend", "index.html")
-    return FileResponse(index_path)
+    # The image only ships app/, so there is no index.html to serve here.
+    # NGINX owns the static files; this is just a liveness check.
+    return {"status": "ok"}
 
 @app.get("/favicon.ico", include_in_schema=False)
 async def favicon():
-    from fastapi.responses import Response
     return Response(status_code=204)
 
 class ConnectionManager:

@@ -1,11 +1,17 @@
-version: '3.8'
-
 services:
   backend:
     build: .
     container_name: chat-backend
+    # No host port mapping on purpose - the backend is only reachable
+    # from inside the compose network, via NGINX.
     expose:
       - "8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
     restart: always
 
   nginx:
@@ -14,9 +20,9 @@ services:
     ports:
       - "80:80"
     volumes:
-      # TODO: Candidates need to map the frontend directory correctly to serve the HTML
-      # - ./frontend:/usr/share/nginx/html:ro
+      - ./frontend:/usr/share/nginx/html:ro
       - ./nginx.conf:/etc/nginx/nginx.conf:ro
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     restart: always
